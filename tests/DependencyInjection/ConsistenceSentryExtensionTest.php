@@ -11,16 +11,11 @@ use Consistence\Sentry\SymfonyBundle\Annotation\Remove;
 use Consistence\Sentry\SymfonyBundle\Annotation\Set;
 use Generator;
 use PHPUnit\Framework\Assert;
+use Symfony\Component\DependencyInjection\ContainerBuilder;
+use Symfony\Component\DependencyInjection\ParameterBag\ParameterBag;
 
-class ConsistenceSentryExtensionTest extends \Matthias\SymfonyDependencyInjectionTest\PhpUnit\AbstractExtensionTestCase
+class ConsistenceSentryExtensionTest extends \PHPUnit\Framework\TestCase
 {
-
-	public function setUp(): void
-	{
-		parent::setUp();
-		$this->setParameter('kernel.root_dir', $this->getRootDir());
-		$this->setParameter('kernel.cache_dir', $this->getCacheDir());
-	}
 
 	private function getTestsDir(): string
 	{
@@ -40,16 +35,6 @@ class ConsistenceSentryExtensionTest extends \Matthias\SymfonyDependencyInjectio
 	private function getCacheDir(): string
 	{
 		return $this->getTempDir();
-	}
-
-	/**
-	 * @return \Symfony\Component\DependencyInjection\Extension\ExtensionInterface[]
-	 */
-	protected function getContainerExtensions(): array
-	{
-		return [
-			new ConsistenceSentryExtension(),
-		];
 	}
 
 	/**
@@ -108,7 +93,7 @@ class ConsistenceSentryExtensionTest extends \Matthias\SymfonyDependencyInjectio
 	/**
 	 * @dataProvider configureContainerParameterDataProvider
 	 *
-	 * @param mixed[][] $configuration
+	 * @param mixed[][]|array $configuration
 	 * @param string $parameterName
 	 * @param mixed $expectedParameterValue
 	 */
@@ -118,37 +103,80 @@ class ConsistenceSentryExtensionTest extends \Matthias\SymfonyDependencyInjectio
 		$expectedParameterValue
 	): void
 	{
-		$this->load($configuration);
+		$container = $this->createContainer();
+		$container->registerExtension(new ConsistenceSentryExtension());
 
-		$this->assertContainerBuilderHasParameter(
-			$parameterName,
-			$expectedParameterValue
-		);
+		$this->load($container, $configuration);
 
-		$this->compile();
+		self::assertContainerHasParameter($container, $parameterName);
+		Assert::assertSame($expectedParameterValue, $container->getParameter($parameterName));
+
+		$container->compile();
 	}
 
 	public function testConfigureGeneratedFilesDirNonExistingDirectoryCreatesDir(): void
 	{
+		$container = $this->createContainer();
+		$container->registerExtension(new ConsistenceSentryExtension());
+
 		$dir = $this->getTempDir() . '/testConfigureGeneratedFilesDirNonExistingDirectoryCreatesDir';
 		@rmdir($dir);
 		Assert::assertFileNotExists($dir);
 
-		$this->load([
-			'generated_files_dir' => $dir,
-		]);
+		$this->load(
+			$container,
+			[
+				'generated_files_dir' => $dir,
+			]
+		);
 
-		$this->assertContainerBuilderHasParameter(
-			ConsistenceSentryExtension::CONTAINER_PARAMETER_GENERATED_TARGET_DIR,
-			realpath($dir)
+		self::assertContainerHasParameter($container, ConsistenceSentryExtension::CONTAINER_PARAMETER_GENERATED_TARGET_DIR);
+		Assert::assertSame(
+			realpath($dir),
+			$container->getParameter(ConsistenceSentryExtension::CONTAINER_PARAMETER_GENERATED_TARGET_DIR)
 		);
-		$this->assertContainerBuilderHasParameter(
-			ConsistenceSentryExtension::CONTAINER_PARAMETER_GENERATED_CLASS_MAP_TARGET_FILE,
-			realpath($dir) . '/_classMap.php'
+
+		self::assertContainerHasParameter($container, ConsistenceSentryExtension::CONTAINER_PARAMETER_GENERATED_CLASS_MAP_TARGET_FILE);
+		Assert::assertSame(
+			realpath($dir) . '/_classMap.php',
+			$container->getParameter(ConsistenceSentryExtension::CONTAINER_PARAMETER_GENERATED_CLASS_MAP_TARGET_FILE)
 		);
+
 		Assert::assertFileExists($dir);
 
-		$this->compile();
+		$container->compile();
+	}
+
+	/**
+	 * @param \Symfony\Component\DependencyInjection\ContainerBuilder $container
+	 * @param mixed[][]|array $configuration
+	 */
+	private function load(ContainerBuilder $container, array $configuration): void
+	{
+		foreach ($container->getExtensions() as $extension) {
+			$extension->load([$configuration], $container);
+		}
+	}
+
+	private function createContainer(): ContainerBuilder
+	{
+		$container = new ContainerBuilder(new ParameterBag([]));
+		$container->getCompilerPassConfig()->setOptimizationPasses([]);
+		$container->getCompilerPassConfig()->setRemovingPasses([]);
+		$container->getCompilerPassConfig()->setAfterRemovingPasses([]);
+
+		$container->setParameter('kernel.root_dir', $this->getRootDir());
+		$container->setParameter('kernel.cache_dir', $this->getCacheDir());
+
+		return $container;
+	}
+
+	private static function assertContainerHasParameter(ContainerBuilder $container, string $parameterName): void
+	{
+		Assert::assertTrue(
+			$container->hasParameter($parameterName),
+			sprintf('Container is missing required parameter `%s`.', $parameterName)
+		);
 	}
 
 }
