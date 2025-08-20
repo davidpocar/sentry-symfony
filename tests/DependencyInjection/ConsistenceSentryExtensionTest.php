@@ -11,16 +11,12 @@ use Consistence\Sentry\SymfonyBundle\Annotation\Remove;
 use Consistence\Sentry\SymfonyBundle\Annotation\Set;
 use Generator;
 use PHPUnit\Framework\Assert;
+use Symfony\Component\DependencyInjection\ContainerBuilder;
+use Symfony\Component\DependencyInjection\Extension\PrependExtensionInterface;
+use Symfony\Component\DependencyInjection\ParameterBag\ParameterBag;
 
-class ConsistenceSentryExtensionTest extends \Matthias\SymfonyDependencyInjectionTest\PhpUnit\AbstractExtensionTestCase
+class ConsistenceSentryExtensionTest extends \PHPUnit\Framework\TestCase
 {
-
-	public function setUp(): void
-	{
-		parent::setUp();
-		$this->setParameter('kernel.root_dir', $this->getRootDir());
-		$this->setParameter('kernel.cache_dir', $this->getCacheDir());
-	}
 
 	private function getTestsDir(): string
 	{
@@ -40,16 +36,6 @@ class ConsistenceSentryExtensionTest extends \Matthias\SymfonyDependencyInjectio
 	private function getCacheDir(): string
 	{
 		return $this->getTempDir();
-	}
-
-	/**
-	 * @return \Symfony\Component\DependencyInjection\Extension\ExtensionInterface[]
-	 */
-	protected function getContainerExtensions(): array
-	{
-		return [
-			new ConsistenceSentryExtension(),
-		];
 	}
 
 	/**
@@ -108,7 +94,7 @@ class ConsistenceSentryExtensionTest extends \Matthias\SymfonyDependencyInjectio
 	/**
 	 * @dataProvider configureContainerParameterDataProvider
 	 *
-	 * @param mixed[][] $configuration
+	 * @param mixed[][]|array $configuration
 	 * @param string $parameterName
 	 * @param mixed $expectedParameterValue
 	 */
@@ -118,37 +104,114 @@ class ConsistenceSentryExtensionTest extends \Matthias\SymfonyDependencyInjectio
 		$expectedParameterValue
 	): void
 	{
-		$this->load($configuration);
+		$container = $this->createContainer();
+		$this->setKernelParameters($container);
 
-		$this->assertContainerBuilderHasParameter(
-			$parameterName,
-			$expectedParameterValue
-		);
+		$container->registerExtension(new ConsistenceSentryExtension());
+		self::loadRegisteredExtension($container, $configuration);
 
-		$this->compile();
+		self::assertContainerHasParameter($container, $parameterName);
+		Assert::assertSame($expectedParameterValue, $container->getParameter($parameterName));
+
+		$container->compile();
 	}
 
 	public function testConfigureGeneratedFilesDirNonExistingDirectoryCreatesDir(): void
 	{
+		$container = $this->createContainer();
+		$this->setKernelParameters($container);
+
+		$container->registerExtension(new ConsistenceSentryExtension());
+
 		$dir = $this->getTempDir() . '/testConfigureGeneratedFilesDirNonExistingDirectoryCreatesDir';
 		@rmdir($dir);
 		Assert::assertFileNotExists($dir);
 
-		$this->load([
+		self::loadRegisteredExtension($container, [
 			'generated_files_dir' => $dir,
 		]);
 
-		$this->assertContainerBuilderHasParameter(
-			ConsistenceSentryExtension::CONTAINER_PARAMETER_GENERATED_TARGET_DIR,
-			realpath($dir)
+		self::assertContainerHasParameter($container, ConsistenceSentryExtension::CONTAINER_PARAMETER_GENERATED_TARGET_DIR);
+		Assert::assertSame(
+			realpath($dir),
+			$container->getParameter(ConsistenceSentryExtension::CONTAINER_PARAMETER_GENERATED_TARGET_DIR)
 		);
-		$this->assertContainerBuilderHasParameter(
-			ConsistenceSentryExtension::CONTAINER_PARAMETER_GENERATED_CLASS_MAP_TARGET_FILE,
-			realpath($dir) . '/_classMap.php'
+
+		self::assertContainerHasParameter($container, ConsistenceSentryExtension::CONTAINER_PARAMETER_GENERATED_CLASS_MAP_TARGET_FILE);
+		Assert::assertSame(
+			realpath($dir) . '/_classMap.php',
+			$container->getParameter(ConsistenceSentryExtension::CONTAINER_PARAMETER_GENERATED_CLASS_MAP_TARGET_FILE)
 		);
+
 		Assert::assertFileExists($dir);
 
-		$this->compile();
+		$container->compile();
+	}
+
+	private function createContainer(): ContainerBuilder
+	{
+		$container = new ContainerBuilder(new ParameterBag([]));
+		$container->getCompilerPassConfig()->setOptimizationPasses([]);
+		$container->getCompilerPassConfig()->setRemovingPasses([]);
+		$container->getCompilerPassConfig()->setAfterRemovingPasses([]);
+
+		return $container;
+	}
+
+	private function setKernelParameters(ContainerBuilder $container): void
+	{
+		$container->setParameter('kernel.root_dir', $this->getRootDir());
+		$container->setParameter('kernel.cache_dir', $this->getCacheDir());
+	}
+
+	private static function assertContainerHasParameter(
+		ContainerBuilder $container,
+		string $parameterName
+	): void
+	{
+		Assert::assertTrue(
+			$container->hasParameter($parameterName),
+			sprintf('Expecting the container to have parameter `%s`.', $parameterName)
+		);
+	}
+
+	/**
+	 * @param \Symfony\Component\DependencyInjection\ContainerBuilder $container
+	 * @param mixed[][]|array $configuration
+	 */
+	private static function loadRegisteredExtension(
+		ContainerBuilder $container,
+		array $configuration = []
+	): void
+	{
+		$registeredExtensionsCount = count($container->getExtensions());
+
+		assert(
+			$registeredExtensionsCount === 1,
+			sprintf('There are %d extensions registered but one is expected', $registeredExtensionsCount)
+		);
+
+		self::loadRegisteredExtensionsUsingCommonConfiguration($container, $configuration);
+	}
+
+	/**
+	 * @param \Symfony\Component\DependencyInjection\ContainerBuilder $container
+	 * @param mixed[][]|array $configuration
+	 */
+	private static function loadRegisteredExtensionsUsingCommonConfiguration(
+		ContainerBuilder $container,
+		array $configuration = []
+	): void
+	{
+		foreach ($container->getExtensions() as $extension) {
+			if ($extension instanceof PrependExtensionInterface) {
+				$extension->prepend($container);
+			}
+		}
+
+		foreach ($container->getExtensions() as $extension) {
+			$extension->load([$configuration], $container);
+		}
 	}
 
 }
